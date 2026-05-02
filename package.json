@@ -1,0 +1,29 @@
+{
+  "name": "domlover",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "start": "npm run build && node server/index.js"
+  },
+  "devDependencies": {
+    "vite": "^6.3.0",
+    "vite-plugin-pwa": "^0.21.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "firebase": "^11.6.0",
+    "multer": "^2.1.1",
+    "sentiment": "^5.0.2",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "sqlite3": "^6.0.1",
+    "web-push": "^3.6.7"
+  }
+}

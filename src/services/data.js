@@ -1,0 +1,222 @@
+import { io } from 'socket.io-client';
+
+const DB_PREFIX = 'dl_';
+
+export const DataService = {
+  socket: null,
+
+  async _rpc(method, ...args) {
+    const res = await fetch('/api/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, args })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.result;
+  },
+
+  initSocket() {
+    if (!this.socket) {
+      this.socket = io('/');
+      const userId = this.getCurrentUserId();
+      if (userId) {
+        this.socket.emit('register', userId);
+      }
+    }
+    return this.socket;
+  },
+
+  async initPush() {
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        let subscription = await registration.pushManager.getSubscription();
+        if (!subscription) {
+          const vapidPublicKey = await this._rpc('getVapidPublicKey');
+          if (vapidPublicKey) {
+            subscription = await registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: vapidPublicKey
+            });
+            await this._rpc('savePushSubscription', this.getCurrentUserId(), subscription);
+          }
+        }
+      } catch (err) {
+        console.error('Push error:', err);
+      }
+    }
+  },
+
+  getCurrentUserId() { return localStorage.getItem(DB_PREFIX + 'currentUser'); },
+  setCurrentUserId(id) { 
+    if (id) {
+      localStorage.setItem(DB_PREFIX + 'currentUser', id);
+      if (this.socket) this.socket.emit('register', id);
+    } else {
+      localStorage.removeItem(DB_PREFIX + 'currentUser');
+      if (this.socket) this.socket.disconnect();
+      this.socket = null;
+    }
+  },
+
+  // ── Auth & Security ──
+  async register(email, password, displayName, role) {
+    const user = await this._rpc('register', email, password, displayName, role);
+    this.setCurrentUserId(user.id);
+    return user;
+  },
+  async login(email, password) {
+    const user = await this._rpc('login', email, password);
+    this.setCurrentUserId(user.id);
+    return user;
+  },
+  logout() { this.setCurrentUserId(null); },
+
+  async verifyPin(pin) {
+    const userId = this.getCurrentUserId();
+    return await this._rpc('verifyPin', userId, pin);
+  },
+  async setPin(pin) {
+    const userId = this.getCurrentUserId();
+    return await this._rpc('setPin', userId, pin);
+  },
+  async changePassword(oldPassword, newPassword) {
+    const userId = this.getCurrentUserId();
+    return await this._rpc('changePassword', userId, oldPassword, newPassword);
+  },
+
+  async getCurrentUser() {
+    const id = this.getCurrentUserId();
+    if (!id) return null;
+    return await this._rpc('getCurrentUser', id);
+  },
+  async updateUser(userId, updates) { return await this._rpc('updateUser', userId, updates); },
+  async getPartner() {
+    const me = await this.getCurrentUser();
+    if (!me || !me.roomId) return null;
+    return await this._rpc('getPartner', me.roomId, me.id);
+  },
+
+  // ── Rooms ──
+  async createRoom(name) {
+    const me = await this.getCurrentUser();
+    return await this._rpc('createRoom', me.id, name);
+  },
+  async joinRoom(code) {
+    const me = await this.getCurrentUser();
+    return await this._rpc('joinRoom', me.id, code);
+  },
+  async getCurrentRoom() {
+    const me = await this.getCurrentUser();
+    if (!me || !me.roomId) return null;
+    return await this._rpc('getCurrentRoom', me.roomId);
+  },
+
+  // ── Tasks ──
+  async createTask(data) { return await this._rpc('createTask', data); },
+  async updateTask(taskId, updates) { return await this._rpc('updateTask', taskId, updates); },
+  async deleteTask(taskId) { return await this._rpc('deleteTask', taskId); },
+  async getTasks(roomId, filters = {}) { return await this._rpc('getTasks', roomId, filters); },
+  async markTaskViewed(taskId) {
+    return await this._rpc('markTaskViewed', taskId);
+  },
+  async getTaskHistory(subUserId) {
+    return await this._rpc('getTaskHistory', subUserId);
+  },
+
+  // ── Task Submissions ──
+  async submitTask(taskId, proofData) { return await this._rpc('submitTask', taskId, proofData); },
+  async reviewSubmission(subId, approved, comment = '') { return await this._rpc('reviewSubmission', subId, approved, comment); },
+  async getSubmissions(roomId, status = null) { return await this._rpc('getSubmissions', roomId, status); },
+  async getSubmissionsForTask(taskId) { return await this._rpc('getSubmissionsForTask', taskId); },
+
+  // ── Coins & Stats ──
+  async addCoins(userId, amount, reason) { return await this._rpc('addCoins', userId, amount, reason); },
+  async spendCoins(userId, amount, reason) { return await this._rpc('spendCoins', userId, amount, reason); },
+  async getTransactions(userId) { return await this._rpc('getTransactions', userId); },
+  async getAchievements() { return await this._rpc('getAchievements', this.getCurrentUserId()); },
+  async getAchievementsForUser(userId) { return await this._rpc('getAchievements', userId); },
+  async toggleAchievement(userId, achievementId, forceStatus) { return await this._rpc('toggleAchievement', userId, achievementId, forceStatus); },
+  async getWeeklyReport() {
+    const me = await this.getCurrentUser();
+    if (!me || !me.roomId) return null;
+    const subUserId = me.role === 'sub' ? me.id : (await this.getPartner())?.id;
+    return await this._rpc('getWeeklyReport', me.roomId, subUserId);
+  },
+
+  // ── Wheel of Fortune ──
+  async getWheelOptions(roomId) { return await this._rpc('getWheelOptions', roomId); },
+  async saveWheelOptions(roomId, options) { return await this._rpc('saveWheelOptions', roomId, options); },
+  async spinWheel(roomId) { return await this._rpc('spinWheel', roomId, this.getCurrentUserId()); },
+
+  // ── Rules ──
+  async createRule(data) { return await this._rpc('createRule', data); },
+  async updateRule(ruleId, updates) { return await this._rpc('updateRule', ruleId, updates); },
+  async deleteRule(ruleId) { return await this._rpc('deleteRule', ruleId); },
+  async getRules(roomId) { return await this._rpc('getRules', roomId); },
+
+  // ── Limits ──
+  async createLimit(data) { return await this._rpc('createLimit', data); },
+  async updateLimit(limitId, updates) { return await this._rpc('updateLimit', limitId, updates); },
+  async deleteLimit(limitId) { return await this._rpc('deleteLimit', limitId); },
+  async getLimits(roomId) { return await this._rpc('getLimits', roomId); },
+
+  // ── Rewards ──
+  async createReward(data) { return await this._rpc('createReward', data); },
+  async updateReward(rewardId, updates) { return await this._rpc('updateReward', rewardId, updates); },
+  async deleteReward(rewardId) { return await this._rpc('deleteReward', rewardId); },
+  async getRewards(roomId) { return await this._rpc('getRewards', roomId); },
+  async purchaseReward(rewardId, userId) { return await this._rpc('purchaseReward', rewardId, userId); },
+  async getPurchases(userId) { return await this._rpc('getPurchases', userId); },
+  async deletePurchase(purchaseId) { return await this._rpc('deletePurchase', purchaseId); },
+
+  // ── Demerits ──
+  async addDemerit(data) { return await this._rpc('addDemerit', data); },
+  async getDemerits(roomId) { return await this._rpc('getDemerits', roomId); },
+
+  // ── Journal ──
+  async createJournalEntry(data) { return await this._rpc('createJournalEntry', data); },
+  async updateJournalEntry(entryId, updates) { return await this._rpc('updateJournalEntry', entryId, updates); },
+  async getJournalEntries(roomId) { return await this._rpc('getJournalEntries', roomId); },
+
+  // ── Journal Prompts ──
+  async createJournalPrompt(data) { return await this._rpc('createJournalPrompt', data); },
+  async getJournalPrompts(roomId) { return await this._rpc('getJournalPrompts', roomId); },
+
+  // ── Guide Messages ──
+  async addGuideMessage(data) { return await this._rpc('addGuideMessage', data); },
+  async getGuideMessages(roomId) { return await this._rpc('getGuideMessages', roomId); },
+
+  // ── Calendar Stats ──
+  async getCalendarData(roomId, year, month) { return await this._rpc('getCalendarData', roomId, year, month); },
+
+  // ── File Upload ──
+  async uploadFile(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          reject(new Error('Upload failed'));
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('Upload error')));
+      xhr.open('POST', '/api/upload');
+      xhr.send(formData);
+    });
+  },
+
+  // ── Theme ──
+  getTheme() { return localStorage.getItem(DB_PREFIX + 'theme') || 'dark'; },
+  setTheme(theme) { localStorage.setItem(DB_PREFIX + 'theme', theme); },
+};
